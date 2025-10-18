@@ -39,8 +39,8 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Create a non-root user
-RUN groupadd -r nlweb && \
-    useradd -r -g nlweb -d /app -s /bin/bash nlweb
+RUN groupadd -r -g 1001 nlweb && \
+    useradd -r -g nlweb -u 1001 -d /app -s /bin/bash nlweb
 
 # Copy application code
 COPY code/ /app/
@@ -70,4 +70,4 @@ ENV PORT=8000
 ENV NLWEB_CONFIG_DIR=/app/config
 
 # Command to run the application
-CMD ["python", "python/app-file.py"]
+CMD ["python", "python/app-aiohttp.py"]

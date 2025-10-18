@@ -54,12 +54,12 @@ class NLWebHandler:
         self.init_time = time.time()
         self.first_result_sent = False
 
-        # the site that is being queried
-        self.site = get_param(query_params, "site", str, "all")
-        
-        # Parse comma-separated sites
-        if self.site and isinstance(self.site, str) and "," in self.site:
-            self.site = [s.strip() for s in self.site.split(",") if s.strip()]
+        # The site UUID and stringified UUID from the auth middleware
+        self.site_id = query_params.get("site_id")
+        self.site = query_params.get("site")
+
+        if not self.site_id or not self.site:
+            raise ValueError("site_id and site are missing from the request context")
 
         # the query that the user entered
         self.query = get_param(query_params, "query", str, "")
@@ -138,7 +138,7 @@ class NLWebHandler:
         self.requires_decontextualization = False
 
         # the type of item that is being sought. e.g., recipe, movie, etc.
-        self.item_type = siteToItemType(self.site)
+        self.item_type = siteToItemType(self.site_id)
 
         # required item type from request parameter
         self.required_item_type = get_param(query_params, "required_item_type", str, None)
@@ -401,13 +401,14 @@ class NLWebHandler:
         # Wait for retrieval to be done
         if not self.retrieval_done_event.is_set():
             # Skip retrieval for sites without embeddings
-            if not site_supports_standard_retrieval(self.site):
+            if not site_supports_standard_retrieval(self.site_id):
                 self.final_retrieved_items = []
                 self.retrieval_done_event.set()
             else:
                 items = await search(
                     self.decontextualized_query, 
                     self.site,
+                    site_id=self.site_id,
                     query_params=self.query_params,
                     handler=self
                 )

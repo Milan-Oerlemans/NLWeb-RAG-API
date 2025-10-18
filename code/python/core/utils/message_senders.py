@@ -49,7 +49,7 @@ class MessageSender:
         # Create UserQuery for the content
         user_query = UserQuery(
             query=self.handler.query,
-            site=self.handler.site,
+            site_id=self.handler.site,
             mode=self.handler.generate_mode,
             prev_queries=self.handler.prev_queries
         )

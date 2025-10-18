@@ -20,6 +20,7 @@ from core.utils.utils import get_param
 from misc.logger.logging_config_helper import get_configured_logger
 from misc.logger.logger import LogLevel
 from core.utils.json_utils import merge_json_array
+from uuid import UUID
 
 logger = get_configured_logger("retriever")
 
@@ -707,12 +708,12 @@ class VectorDBClient:
         
         return final_results
     
-    async def delete_documents_by_site(self, site: str, **kwargs) -> int:
+    async def delete_documents_by_site(self, site_id: UUID, **kwargs) -> int:
         """
         Delete all documents matching the specified site.
         
         Args:
-            site: Site identifier
+            site_id: Site identifier (UUID)
             **kwargs: Additional parameters
             
         Returns:
@@ -722,22 +723,27 @@ class VectorDBClient:
             raise ValueError("No write endpoint configured for delete operations")
             
         async with self._retrieval_lock:
-            logger.info(f"Deleting documents for site: {site} using write endpoint: {self.write_endpoint}")
+            logger.info(f"Deleting documents for site: {site_id} using write endpoint: {self.write_endpoint}")
             
             try:
                 client = await self.get_client(self.write_endpoint)
-                count = await client.delete_documents_by_site(site, **kwargs)
-                logger.info(f"Successfully deleted {count} documents for site: {site}")
+                # Assuming the client has a method that accepts site_id
+                if hasattr(client, 'delete_documents_by_site_id'):
+                    count = await client.delete_documents_by_site_id(site_id, **kwargs)
+                else:
+                    # Fallback for clients not yet updated
+                    count = await client.delete_documents_by_site(str(site_id), **kwargs)
+                logger.info(f"Successfully deleted {count} documents for site: {site_id}")
                 return count
             except Exception as e:
-                logger.exception(f"Error deleting documents for site {site}: {e}")
+                logger.exception(f"Error deleting documents for site {site_id}: {e}")
                 logger.log_with_context(
                     LogLevel.ERROR,
                     "Document deletion failed",
                     {
                         "error_type": type(e).__name__,
                         "error_message": str(e),
-                        "site": site,
+                        "site_id": str(site_id),
                         "endpoint": self.write_endpoint
                     }
                 )
@@ -779,7 +785,7 @@ class VectorDBClient:
                 )
                 raise
     
-    async def search(self, query: str, site: Union[str, List[str]], 
+    async def search(self, query: str, site: Union[str, List[str], UUID], 
                     num_results: int = 50, endpoint_name: Optional[str] = None, **kwargs) -> List[List[str]]:
         """
         Search for documents matching the query and site.
@@ -794,17 +800,20 @@ class VectorDBClient:
         Returns:
             List of search results
         """
+        logger.debug(f"VectorDBClient.search called with query: '{query[:50]}...', site: {site}, num_results: {num_results}")
         # Handle configured sites
         if site == "all":
             sites = CONFIG.nlweb.sites
             if sites and sites != "all":
                 # Use configured sites instead of "all"
                 site = sites
+                logger.debug(f"Site resolved to 'all', using configured sites: {site}")
 
         # If specific endpoint is requested, use only that endpoint
         if endpoint_name:
             if endpoint_name not in CONFIG.retrieval_endpoints:
                 raise ValueError(f"Invalid endpoint: {endpoint_name}")
+            logger.debug(f"Using specific endpoint: {endpoint_name}")
             temp_client = VectorDBClient(endpoint_name=endpoint_name)
             return await temp_client.search(query, site, num_results, **kwargs)
         
@@ -817,7 +826,7 @@ class VectorDBClient:
 
         async with self._retrieval_lock:
             logger.info(f"Searching for '{query[:50]}...' in site: {site}, num_results: {num_results}")
-            logger.info(f"Querying {len(self.enabled_endpoints)} enabled endpoints in parallel")
+            logger.info(f"Querying {len(self.enabled_endpoints)} enabled endpoints in parallel: {list(self.enabled_endpoints.keys())}")
             start_time = time.time()
             
             # Create tasks for parallel queries to endpoints that have the requested site
@@ -826,6 +835,7 @@ class VectorDBClient:
             skipped_endpoints = []
             
             for endpoint_name in self.enabled_endpoints:
+                logger.debug(f"Processing endpoint: {endpoint_name}")
                 try:
                     client = await self.get_client(endpoint_name)
                     
@@ -842,24 +852,30 @@ class VectorDBClient:
                     
                     # Use search_all_sites if site is "all"
                     if site == "all":
+                        logger.debug(f"Creating search_all_sites task for endpoint: {endpoint_name}")
                         task = asyncio.create_task(client.search_all_sites(query, num_results, **kwargs))
                     else:
+                        logger.debug(f"Creating search task for endpoint: {endpoint_name} with site: {site}")
                         # Pass all arguments including handler to all clients
                         # Individual clients can choose to use or ignore the handler
                         task = asyncio.create_task(client.search(query, site, num_results, **kwargs))
                     tasks.append(task)
                     endpoint_names.append(endpoint_name)
+                    logger.debug(f"Task created for endpoint: {endpoint_name}")
                 except Exception as e:
                     logger.warning(f"Failed to create search task for endpoint {endpoint_name}: {e}")
             
             if skipped_endpoints:
                 logger.debug(f"Skipped endpoints without site '{site}': {skipped_endpoints}")
             
+            logger.debug(f"Total tasks created: {len(tasks)}. Total enabled endpoints: {len(self.enabled_endpoints)}. Skipped: {len(skipped_endpoints)}.")
             if not tasks:
+                logger.error(f"DEBUG: No tasks were created. Total enabled endpoints: {len(self.enabled_endpoints)}. Skipped: {len(skipped_endpoints)}.")
                 raise ValueError("No valid endpoints available for search")
             
             # Execute all searches in parallel and collect results
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            logger.debug(f"Results from asyncio.gather: {results}")
             
             # Process results and handle failures gracefully
             endpoint_results = {}
@@ -872,10 +888,12 @@ class VectorDBClient:
                     logger.warning(f"Endpoint {endpoint_name} returned None, treating as empty results")
                     endpoint_results[endpoint_name] = []
                 else:
+                    logger.debug(f"Endpoint {endpoint_name} returned {len(result)} results.")
                     endpoint_results[endpoint_name] = result
                     successful_endpoints += 1
             
             if successful_endpoints == 0:
+                logger.error("All endpoint searches failed.")
                 raise ValueError("All endpoint searches failed")
             
             # Aggregate and deduplicate results
@@ -896,7 +914,7 @@ class VectorDBClient:
                     "endpoints_queried": len(tasks),
                     "endpoints_succeeded": successful_endpoints,
                     "total_results": len(final_results),
-                    "site": site
+                    "site": str(site) if isinstance(site, UUID) else site
                 }
             )
             
@@ -1088,6 +1106,7 @@ def get_vector_db_client(endpoint_name: Optional[str] = None,
 
 async def search(query: str,
                 site: str = "all",
+                site_id: UUID = None,
                 num_results: int = 50,
                 endpoint_name: Optional[str] = None,
                 query_params: Optional[Dict[str, Any]] = None,
@@ -1099,6 +1118,7 @@ async def search(query: str,
     Args:
         query: The search query
         site: Site to search in (default: "all")
+        site_id: The UUID of the site to search in
         num_results: Number of results to return (default: 10)
         endpoint_name: Optional name of the endpoint to use
         query_params: Optional query parameters for overriding endpoint
@@ -1115,7 +1135,11 @@ async def search(query: str,
     # Pass handler through kwargs if provided
     if handler:
         kwargs['handler'] = handler
-    results = await client.search(query, site, num_results, **kwargs)
+    
+    # Determine the correct site identifier to use
+    search_site = site_id if site_id else site
+    
+    results = await client.search(query, search_site, num_results, **kwargs)
     
     # Send retrieval count message if handler is provided and in debug mode
     if handler and getattr(handler, 'debug_mode', False) and hasattr(handler, 'http_handler') and hasattr(handler.http_handler, 'write_stream'):

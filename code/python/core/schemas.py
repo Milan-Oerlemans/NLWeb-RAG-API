@@ -73,15 +73,15 @@ class MessageType(str, Enum):
 class UserQuery:
     """User query content structure."""
     query: str
-    site: Optional[str] = None
+    site_id: Optional[str] = None
     mode: Optional[str] = None
     prev_queries: Optional[List[str]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary, omitting None values."""
         result = {"query": self.query}
-        if self.site is not None:
-            result["site"] = self.site
+        if self.site_id is not None:
+            result["site_id"] = self.site_id
         if self.mode is not None:
             result["mode"] = self.mode
         if self.prev_queries is not None:
@@ -93,7 +93,7 @@ class UserQuery:
         """Create UserQuery from dictionary."""
         return cls(
             query=data.get("query", ""),
-            site=data.get("site"),
+            site_id=data.get("site_id"),
             mode=data.get("mode"),
             prev_queries=data.get("prev_queries")
         )
@@ -196,7 +196,7 @@ class ConversationEntry:
     Used for storing conversation history in the database.
     """
     user_id: str                    # User ID (if logged in) or anonymous ID
-    site: str                       # Site context for the conversation
+    site_id: str                       # Site context for the conversation
     message_id: str                 # Message ID to group related messages in a conversation
     user_prompt: str                # The user's question/prompt
     response: Union[str, List[Message]]  # The assistant's response (legacy str or Message list)
@@ -217,7 +217,7 @@ class ConversationEntry:
             
         return {
             "user_id": self.user_id,
-            "site": self.site,
+            "site_id": self.site_id,
             "message_id": self.message_id,
             "user_prompt": self.user_prompt,
             "response": response_data,
@@ -265,7 +265,7 @@ class ConversationEntry:
 
 # Convenience functions for creating common message types
 
-def create_user_message(query: str, site: Optional[str] = None, mode: Optional[str] = None,
+def create_user_message(query: str, site_id: Optional[str] = None, mode: Optional[str] = None,
                        sender_info: Optional[Dict[str, Any]] = None,
                        handler=None, send: bool = True) -> Message:
     """
@@ -273,7 +273,7 @@ def create_user_message(query: str, site: Optional[str] = None, mode: Optional[s
     
     Args:
         query: The user's query text
-        site: Optional site filter
+        site_id: Optional site filter
         mode: Optional query mode
         sender_info: Optional sender information
         handler: Handler instance (provides conversation_id and send capability)
@@ -282,7 +282,7 @@ def create_user_message(query: str, site: Optional[str] = None, mode: Optional[s
     Returns:
         The created Message object
     """
-    user_query = UserQuery(query=query, site=site, mode=mode)
+    user_query = UserQuery(query=query, site_id=site_id, mode=mode)
     message = Message(
         sender_type=SenderType.USER,
         message_type=MessageType.QUERY,

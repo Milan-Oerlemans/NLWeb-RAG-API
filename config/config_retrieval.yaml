@@ -1,10 +1,10 @@
-write_endpoint: qdrant_local
+write_endpoint: postgres
 
 endpoints:
 
 #Azure endpoints
   azure_ai_search:
-    enabled: true
+    enabled: false  
     api_key_env: AZURE_VECTOR_SEARCH_API_KEY
     api_endpoint_env: AZURE_VECTOR_SEARCH_ENDPOINT
     index_name: embeddings1536
@@ -27,7 +27,7 @@ endpoints:
 
   # Bing Web Search API for real-time web search
   bing_search:
-    enabled: true
+    enabled: false
     # API key for Bing Web Search API
     api_key_env: BING_API_KEY
     # Bing API endpoint (optional, defaults to standard Bing API)
@@ -102,19 +102,19 @@ endpoints:
     use_knn: false
 
   postgres:
-    enabled: false
+    enabled: true
     # Database connection details (i.e. "postgresql://<HOST>:<PORT>/<DATABASE>?user=<USERNAME>&sslmode=require")
     api_endpoint_env: POSTGRES_CONNECTION_STRING
     # Password for authentication 
     api_key_env: POSTGRES_PASSWORD
     # Index name to search in
-    index_name: documents
+    index_name: vector_embeddings
     # Specify the database type
     db_type: postgres
 
   # Option 1: Local file-based Qdrant storage
   qdrant_local:
-    enabled: true
+    enabled: false
     # Use local file-based storage with a specific path
     database_path: "../data/db"
     # Set the collection name to use
@@ -136,7 +136,7 @@ endpoints:
 
   # Shopify MCP endpoint for product search across Shopify stores
   shopify:
-    enabled: true
+    enabled: false
     db_type: shopify_mcp
     # Note: mcp_endpoint will be dynamically set based on the site being queried
     name: Shopify MCP Search

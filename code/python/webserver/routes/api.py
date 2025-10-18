@@ -43,6 +43,12 @@ async def ask_handler(request: web.Request) -> web.Response:
                 query_params.update(dict(body_data))
         except Exception as e:
             logger.warning(f"Failed to parse POST body: {e}")
+
+    # Add site_id and site from auth middleware to query_params
+    if 'site_id' in request:
+        query_params['site_id'] = request['site_id']
+    if 'site' in request:
+        query_params['site'] = request['site']
     
     # Check if SSE streaming is requested
     is_sse = request.get('is_sse', False)

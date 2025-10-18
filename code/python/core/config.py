@@ -508,8 +508,8 @@ class AppConfig:
                 json_with_embeddings_folder = os.path.join(base_output_dir, "data", "json_with_embeddings")
     
         # Ensure directories exist
-        os.makedirs(json_data_folder, exist_ok=True)
-        os.makedirs(json_with_embeddings_folder, exist_ok=True)
+        # os.makedirs(json_data_folder, exist_ok=True)
+        # os.makedirs(json_with_embeddings_folder, exist_ok=True)
         
         self.nlweb = NLWebConfig(
             sites=sites_list,

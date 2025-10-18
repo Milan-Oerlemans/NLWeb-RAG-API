@@ -115,7 +115,7 @@ class AioHTTPServer:
         app['config'] = self.config
         
         # Setup middleware
-        from .middleware import setup_middleware
+        from .middleware import setup_middleware, create_main_db_pool, close_main_db_pool
         setup_middleware(app)
         
         # Setup routes
@@ -124,7 +124,9 @@ class AioHTTPServer:
         
         # Setup startup and cleanup handlers
         app.on_startup.append(self._on_startup)
+        app.on_startup.append(create_main_db_pool)
         app.on_cleanup.append(self._on_cleanup)
+        app.on_cleanup.append(close_main_db_pool)
         app.on_shutdown.append(self._on_shutdown)
         
         # Setup client session for outgoing requests

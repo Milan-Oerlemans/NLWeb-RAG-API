@@ -66,6 +66,7 @@ class FastTrack:
             items = await search(
                 self.handler.query, 
                 self.handler.site,
+                site_id=self.handler.site_id,
                 query_params=self.handler.query_params,
                 handler=self.handler
             )

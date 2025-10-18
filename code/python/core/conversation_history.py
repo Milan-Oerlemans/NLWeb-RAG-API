@@ -28,7 +28,7 @@ class StorageProvider(ABC):
     """Abstract base class for storage providers."""
     
     @abstractmethod
-    async def add_conversation(self, user_id: str, site: str, message_id: Optional[str], 
+    async def add_conversation(self, user_id: str, site_id: "UUID", message_id: Optional[str], 
                              user_prompt: str, response: str, conversation_id: str,
                              embedding: Optional[List[float]] = None,
                              summary: Optional[str] = None, main_topics: Optional[List[str]] = None,
@@ -38,7 +38,7 @@ class StorageProvider(ABC):
         
         Args:
             user_id: User ID (if logged in) or anonymous ID
-            site: Site context for the conversation
+            site_id: Site context for the conversation
             message_id: Message ID for grouping. If None, create a new message_id
             user_prompt: The user's question/prompt
             response: The assistant's response
@@ -68,20 +68,20 @@ class StorageProvider(ABC):
         pass
     
     @abstractmethod
-    async def get_recent_conversations(self, user_id: str, site: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_recent_conversations(self, user_id: str, site_id: "UUID", limit: int = 50) -> List[Dict[str, Any]]:
         """
         Retrieve the N most recent conversations for a user and site, grouped by thread.
         
         Args:
             user_id: User ID to retrieve conversations for
-            site: Site to filter by
+            site_id: Site to filter by
             limit: Maximum number of conversations to retrieve
             
         Returns:
             List of thread objects, each containing:
             {
                 "id": message_id,
-                "site": site,
+                "site_id": site_id,
                 "conversations": [
                     {
                         "id": conversation_id,
@@ -111,14 +111,14 @@ class StorageProvider(ABC):
 
     @abstractmethod
     async def search_conversations(self, query: str, user_id: Optional[str] = None, 
-                                 site: Optional[str] = None, limit: int = 10) -> List[ConversationEntry]:
+                                 site_id: Optional["UUID"] = None, limit: int = 10) -> List[ConversationEntry]:
         """
         Search conversations using a query string.
 
         Args:
             query: The search query string
             user_id: Optional user ID to filter results
-            site: Optional site to filter results
+            site_id: Optional site to filter results
             limit: Maximum number of results to return
 
         Returns:
@@ -177,7 +177,7 @@ async def get_storage_client() -> StorageProvider:
         logger.info(f"Storage client initialized successfully")
         return _storage_client
 
-async def add_conversation(user_id: str, site: str, message_id: Optional[str], 
+async def add_conversation(user_id: str, site_id: "UUID", message_id: Optional[str], 
                          user_prompt: str, response: str, conversation_id: str,
                          embedding: Optional[List[float]] = None,
                          summary: Optional[str] = None, main_topics: Optional[List[str]] = None,
@@ -187,7 +187,7 @@ async def add_conversation(user_id: str, site: str, message_id: Optional[str],
     
     Args:
         user_id: User ID (can be anonymous ID)
-        site: Site context
+        site_id: Site context
         message_id: Message ID for grouping. If None, create a new message_id
         user_prompt: User's question
         response: Assistant's response
@@ -201,7 +201,7 @@ async def add_conversation(user_id: str, site: str, message_id: Optional[str],
         ConversationEntry: The stored conversation entry
     """
     client = await get_storage_client()
-    return await client.add_conversation(user_id, site, message_id, user_prompt, response, 
+    return await client.add_conversation(user_id, site_id, message_id, user_prompt, response, 
                                         conversation_id, embedding, summary, main_topics, participants)
 
 async def get_conversation_by_id(conversation_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -218,20 +218,20 @@ async def get_conversation_by_id(conversation_id: str, limit: Optional[int] = No
     client = await get_storage_client()
     return await client.get_conversation_by_id(conversation_id, limit)
 
-async def get_recent_conversations(user_id: str, site: str, limit: int = 50) -> List[Dict[str, Any]]:
+async def get_recent_conversations(user_id: str, site_id: "UUID", limit: int = 50) -> List[Dict[str, Any]]:
     """
     Get recent conversations for a user and site, grouped by thread.
     
     Args:
         user_id: User ID
-        site: Site to filter by
+        site_id: Site to filter by
         limit: Maximum number of conversations to return
         
     Returns:
         List of thread objects with conversations
     """
     client = await get_storage_client()
-    return await client.get_recent_conversations(user_id, site, limit)
+    return await client.get_recent_conversations(user_id, site_id, limit)
 
 async def delete_conversation(conversation_id: str, user_id: Optional[str] = None) -> bool:
     """

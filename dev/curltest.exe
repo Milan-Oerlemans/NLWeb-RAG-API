@@ -1,0 +1,7 @@
+curl -X POST http://localhost:8000/ask \
+-H "Content-Type: application/json" \
+-H "X-API-Key: demo-api-key-25dcca51a863a026cd2b0341" \
+-d '{
+  "query": "What off shore investment oppertunities do you have?",
+  "streaming": false
+}'
