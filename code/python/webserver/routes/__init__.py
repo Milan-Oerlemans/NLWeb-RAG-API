@@ -8,12 +8,14 @@ from .a2a import setup_a2a_routes
 from .conversation import setup_conversation_routes
 from .chat import setup_chat_routes
 from .oauth import setup_oauth_routes
+from .auth import setup_auth_routes
 
 
 def setup_routes(app):
     """Setup all routes for the application"""
     setup_static_routes(app)
     setup_api_routes(app)
+    setup_auth_routes(app)
     setup_health_routes(app)
     setup_mcp_routes(app)
     setup_a2a_routes(app)

@@ -16,7 +16,7 @@ export class NLWebDropdownChat {
     constructor(config = {}) {
         this.config = {
             containerId: config.containerId || 'nlweb-search-container',
-            site: config.site || 'all',
+            apiKey: config.apiKey,
             placeholder: config.placeholder || 'Ask a question...',
             endpoint: config.endpoint || window.location.origin,
             cssPrefix: config.cssPrefix || 'nlweb-dropdown',
@@ -147,16 +147,11 @@ export class NLWebDropdownChat {
             this.chatInterface = new UnifiedChatInterface({
                 skipAutoInit: true,
                 connectionType: 'websocket',  // Use WebSocket for dropdown
-                additionalParams: {
-                    site: this.config.site
-                }
+                apiKey: this.config.apiKey
             });
             
             // Store the initialized flag
             this.chatInitialized = false;
-            
-            // Set the site for the chat interface
-            this.chatInterface.state.selectedSite = this.config.site;
             
             // Initialize event handlers
             this.setupEventHandlers();
@@ -362,8 +357,7 @@ export class NLWebDropdownChat {
         // Chat interface is already initialized in initializeChatInterface()
         // Don't call init() again as it resets the conversations array!
 
-        // Set the site for the search
-        this.chatInterface.state.selectedSite = this.config.site;
+        
 
         // End any existing streaming
         if (this.chatInterface.state.currentStreaming) {
@@ -488,7 +482,7 @@ export class NLWebDropdownChat {
         this.chatInterface.conversationManager.deleteConversation(conversationId, this.chatInterface);
         
         if (this.chatInterface.currentConversationId === conversationId) {
-            this.chatInterface.createNewChat(null, this.config.site);
+            this.chatInterface.createNewChat();
         }
         
         this.updateConversationsList();
@@ -538,12 +532,7 @@ export class NLWebDropdownChat {
         this.searchInput.value = query;
     }
     
-    setSite(site) {
-        this.config.site = site;
-        if (this.chatInterface) {
-            this.chatInterface.selectedSite = site;
-        }
-    }
+    
     
     
     destroy() {

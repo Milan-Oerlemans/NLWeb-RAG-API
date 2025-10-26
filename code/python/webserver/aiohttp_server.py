@@ -54,6 +54,7 @@ class AioHTTPServer:
             
         # Override with environment variables
         config['port'] = int(os.environ.get('PORT', config.get('port', 8000)))
+        config['redis_url'] = os.environ.get('REDIS_URL', config.get('redis_url', None))
         
         # Azure App Service specific
         if os.environ.get('WEBSITE_SITE_NAME'):
@@ -115,11 +116,15 @@ class AioHTTPServer:
         app['config'] = self.config
         
         # Setup middleware
-        from .middleware import setup_middleware, create_main_db_pool, close_main_db_pool
+        from webserver.middleware import setup_middleware, create_main_db_pool, close_main_db_pool
+        from webserver.middleware.auth_utils import WebSocketTicketStore
         setup_middleware(app)
         
+        # Initialize and store the WebSocket ticket store
+        app['ws_ticket_store'] = WebSocketTicketStore(redis_url=app['config'].get('redis_url'))
+
         # Setup routes
-        from .routes import setup_routes
+        from webserver.routes import setup_routes
         setup_routes(app)
         
         # Setup startup and cleanup handlers

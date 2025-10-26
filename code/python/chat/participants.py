@@ -248,6 +248,16 @@ class NLWebParticipant(BaseParticipant):
                 else:
                     # All other parameters pass through as-is (including 'db', 'query', 'site', 'mode', etc.)
                     query_params[key] = [value] if not isinstance(value, list) else value
+        elif isinstance(content, str):
+            # If content is a simple string, treat it as the query
+            query_params['query'] = [content]
+
+        # Extract site info from metadata, overriding any site info present in content
+        if hasattr(message, 'metadata') and message.metadata:
+            if 'site_id' in message.metadata:
+                query_params['site_id'] = [message.metadata['site_id']]
+            if 'site' in message.metadata:
+                query_params['site'] = [message.metadata['site']]
 
         # Extract user info from sender_info
         if hasattr(message, 'sender_info') and message.sender_info:

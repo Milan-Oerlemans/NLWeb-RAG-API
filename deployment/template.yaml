@@ -1,0 +1,553 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  A secure and scalable stack for the NLWeb Fargate service with:
+  - Private ALB for HTTP traffic via API Gateway
+  - Public ALB for WebSocket traffic directly from browsers
+
+Parameters:
+  GatewayStackName:
+    Type: String
+    Description: "The name of the deployed Gateway stack that contains the VPC and ECS Cluster (e.g., sitetor-gateway)."
+  VpcCidr:
+    Type: String
+    Description: "The CIDR block of the VPC where the service is deployed (e.g., 10.0.0.0/16)."
+  DockerImageTag:
+    Type: String
+    Default: "latest"
+    Description: "The tag of the Docker image to deploy from the ECR repository."
+  AppSecretsArn:
+    Type: String
+    Description: "The ARN of the AWS Secrets Manager secret containing the application's environment variables."
+  CertificateArn:
+    Type: String
+    Description: "The ARN of the ACM certificate for the WebSocket ALB (must be in the same region)"
+  WebSocketDomainName:
+    Type: String
+    Description: "The custom domain name for WebSocket connections (e.g., ws.yourdomain.com)"
+    Default: ""
+  PublicSubnetIds:
+    Type: String
+    Description: A list of at least two public subnet IDs for the internet-facing ALB.
+Conditions:
+  HasCustomDomain: !Not [!Equals [!Ref WebSocketDomainName, ""]]
+
+Resources:
+  # =================================================================
+  #  ECR Repository
+  # =================================================================
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: nlweb/app
+
+  # =================================================================
+  #  IAM Roles
+  # =================================================================
+  FargateTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [ecs-tasks.amazonaws.com] }
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: AppSecretsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'secretsmanager:GetSecretValue'
+                Resource: !Ref AppSecretsArn
+
+  FargateTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [ecs-tasks.amazonaws.com] }
+            Action: ['sts:AssumeRole']
+      Policies:
+        - PolicyName: AppSecretsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'secretsmanager:GetSecretValue'
+                Resource: !Ref AppSecretsArn
+
+  # =================================================================
+  #  Logging
+  # =================================================================
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/nlweb/${AWS::StackName}'
+      RetentionInDays: 30
+
+  # =================================================================
+  #  NETWORKING: Private Application Load Balancer (for HTTP via API Gateway)
+  # =================================================================
+  PrivateALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the Private Application Load Balancer (HTTP API Gateway traffic)"
+      VpcId:
+        Fn::ImportValue: !Sub "${GatewayStackName}-VpcId"
+      SecurityGroupIngress:
+        - CidrIp: !Ref VpcCidr  # Only allow traffic from within VPC (API Gateway VPC Link)
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PrivateALB-SG"
+
+  PrivateLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-Private-ALB"
+      Scheme: internal
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub "${GatewayStackName}-PrivateSubnetIds"
+      SecurityGroups: [!Ref PrivateALBSecurityGroup]
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-ALB"
+
+  PrivateALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-Private-TG"
+      VpcId:
+        Fn::ImportValue: !Sub "${GatewayStackName}-VpcId"
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetType: ip
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-TG"
+
+  PrivateALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PrivateALBTargetGroup
+      LoadBalancerArn: !Ref PrivateLoadBalancer
+      Port: 8000
+      Protocol: HTTP
+
+  # =================================================================
+  #  NETWORKING: Public Application Load Balancer (for WebSockets)
+  # =================================================================
+  PublicALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the Public Application Load Balancer (WebSocket traffic)"
+      VpcId:
+        Fn::ImportValue: !Sub "${GatewayStackName}-VpcId"
+      SecurityGroupIngress:
+        # HTTPS for WebSocket connections (wss://)
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          Description: "Allow WebSocket connections over HTTPS from anywhere"
+        # Optional: HTTP for redirect or testing
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          Description: "Allow HTTP for redirect to HTTPS"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicALB-SG"
+
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${AWS::StackName}-Public-ALB"
+      Scheme: internet-facing
+      Subnets: !Split
+        - ","
+        - !Ref PublicSubnetIds
+      SecurityGroups: [!Ref PublicALBSecurityGroup]
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-ALB"
+
+  PublicALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${AWS::StackName}-Public-TG"
+      VpcId:
+        Fn::ImportValue: !Sub "${GatewayStackName}-VpcId"
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetType: ip
+      # CRITICAL: Enable WebSocket support
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: 'lb_cookie'
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-TG"
+
+  # HTTPS Listener for WebSocket connections
+  PublicALBHTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PublicALBTargetGroup
+      LoadBalancerArn: !Ref PublicLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+  # Optional: HTTP Listener for redirect to HTTPS
+  PublicALBHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref PublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # Listener Rule for WebSocket path
+  WebSocketListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref PublicALBHTTPSListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ['/chat/ws']
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref PublicALBTargetGroup
+
+  # =================================================================
+  #  NETWORKING: Shared Service Security Group
+  # =================================================================
+  AppServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the NLWeb Fargate Service"
+      VpcId:
+        Fn::ImportValue: !Sub "${GatewayStackName}-VpcId"
+      SecurityGroupIngress:
+        # Allow traffic from the Private ALB (HTTP API Gateway)
+        - SourceSecurityGroupId: !GetAtt PrivateALBSecurityGroup.GroupId
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          Description: "Allow HTTP from Private ALB"
+        # Allow traffic from the Public ALB (WebSocket)
+        - SourceSecurityGroupId: !GetAtt PublicALBSecurityGroup.GroupId
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          Description: "Allow WebSocket from Public ALB"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ECS-SG"
+
+  # =================================================================
+  #  AWS WAF for Public ALB (WebSocket Protection)
+  # =================================================================
+  WebSocketWAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-WebSocket-WAF"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Rate limiting rule
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+        # AWS Managed Rules - Common Rule Set
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesCommonRuleSetMetric
+        # AWS Managed Rules - Known Bad Inputs
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesKnownBadInputsRuleSetMetric
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-WebSocket-WAF"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WebSocket-WAF"
+
+  WebSocketWAFAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref PublicLoadBalancer
+      WebACLArn: !GetAtt WebSocketWAFWebACL.Arn
+
+  # =================================================================
+  #  API GATEWAY (HTTP API) - Keep for HTTP traffic only
+  # =================================================================
+  HttpApiVpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "${AWS::StackName}-HttpApiVpcLink"
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub "${GatewayStackName}-PrivateSubnetIds"
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/api-gateway/${AWS::StackName}-HttpApi"
+      RetentionInDays: 7
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders: ["*"]
+        AllowMethods: ["GET", "POST", "DELETE", "OPTIONS"]
+        MaxAge: 600
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiLogGroup.Arn
+        Format: '{"requestId":"$context.requestId", "ip": "$context.identity.sourceIp", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "routeKey":"$context.routeKey", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength", "integrationError":"$context.integrationErrorMessage"}'
+      DefinitionBody:
+        openapi: 3.0.1
+        info:
+          title: !Sub "${AWS::StackName}-HttpApi"
+          version: "1.0.0"
+        paths:
+          /{proxy+}:
+            x-amazon-apigateway-any-method:
+              is-private: false
+              x-amazon-apigateway-integration:
+                type: "HTTP_PROXY"
+                httpMethod: "ANY"
+                connectionType: "VPC_LINK"
+                connectionId: !Ref HttpApiVpcLink
+                payloadFormatVersion: "1.0"
+                uri: !Ref PrivateALBListener
+                timeoutInMillis: 29000
+              responses: {}
+
+  # =================================================================
+  #  FARGATE SERVICE & AUTO SCALING
+  # =================================================================
+  AppService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - PrivateALBListener
+      - PublicALBHTTPSListener
+    Properties:
+      ServiceName: !Sub "${AWS::StackName}-Service"
+      Cluster:
+        Fn::ImportValue: !Sub "${GatewayStackName}-EcsClusterArn"
+      TaskDefinition: !Ref AppTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 60
+      LoadBalancers:
+        # Private ALB for HTTP API Gateway traffic
+        - ContainerName: "nlweb-container"
+          ContainerPort: 8000
+          TargetGroupArn: !Ref PrivateALBTargetGroup
+        # Public ALB for WebSocket traffic
+        - ContainerName: "nlweb-container"
+          ContainerPort: 8000
+          TargetGroupArn: !Ref PublicALBTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref AppServiceSecurityGroup
+          Subnets: !Split
+            - ","
+            - Fn::ImportValue: !Sub "${GatewayStackName}-PrivateSubnetIds"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Service"
+
+  AppTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: AppLogGroup
+    Properties:
+      Family: !Sub "${AWS::StackName}-NLWebApp"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '1024' # 1 vCPU
+      Memory: '2048' # 2 GB
+      ExecutionRoleArn: !Ref FargateTaskExecutionRole
+      TaskRoleArn: !Ref FargateTaskRole
+      ContainerDefinitions:
+        - Name: "nlweb-container"
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/nlweb/app:${DockerImageTag}'
+          PortMappings: [{ ContainerPort: 8000 }]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AppLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Secrets:
+            - Name: OAUTH_SESSION_SECRET
+              ValueFrom: !Sub "${AppSecretsArn}:OAUTH_SESSION_SECRET::"
+            - Name: GITHUB_CLIENT_ID
+              ValueFrom: !Sub "${AppSecretsArn}:GITHUB_CLIENT_ID::"
+            - Name: GITHUB_CLIENT_SECRET
+              ValueFrom: !Sub "${AppSecretsArn}:GITHUB_CLIENT_SECRET::"
+            - Name: POSTGRES_CONNECTION_STRING
+              ValueFrom: !Sub "${AppSecretsArn}:POSTGRES_CONNECTION_STRING::"
+            - Name: POSTGRES_PASSWORD
+              ValueFrom: !Sub "${AppSecretsArn}:POSTGRES_PASSWORD::"
+            - Name: MAIN_DB_HOST
+              ValueFrom: !Sub "${AppSecretsArn}:MAIN_DB_HOST::"
+            - Name: MAIN_DB_NAME
+              ValueFrom: !Sub "${AppSecretsArn}:MAIN_DB_NAME::"
+            - Name: MAIN_DB_USER
+              ValueFrom: !Sub "${AppSecretsArn}:MAIN_DB_USER::"
+            - Name: MAIN_DB_PASSWORD
+              ValueFrom: !Sub "${AppSecretsArn}:MAIN_DB_PASSWORD::"
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Sub "${AppSecretsArn}:OPENAI_API_KEY::"
+
+  # --- Auto Scaling Configuration ---
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 5
+      MinCapacity: 1
+      ResourceId: !Sub
+        - service/${ClusterName}/${ServiceName}
+        - ClusterName:
+            Fn::ImportValue: !Sub "${GatewayStackName}-EcsClusterName"
+          ServiceName: !GetAtt AppService.Name
+      RoleARN: !GetAtt ScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: CpuScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 75.0
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+
+  ScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: {Service: [application-autoscaling.amazonaws.com]}
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: service-scaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ['ecs:UpdateService', 'ecs:DescribeServices', 'cloudwatch:DescribeAlarms', 'cloudwatch:GetMetricStatistics']
+                Resource: "*"
+
+Outputs:
+  AppRepositoryUri:
+    Description: "URI of the ECR repository for the NLWeb application"
+    Value: !GetAtt AppRepository.RepositoryUri
+  
+  HttpApiEndpointUrl:
+    Description: "The URL of the HTTP API endpoint (for REST/HTTP traffic)"
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  
+  WebSocketEndpointUrl:
+    Description: "The WebSocket endpoint URL (use this for wss:// connections)"
+    Value: !If
+      - HasCustomDomain
+      - !Sub "wss://${WebSocketDomainName}/chat/ws"
+      - !Sub "wss://${PublicLoadBalancer.DNSName}/chat/ws"
+  
+  PublicALBDNSName:
+    Description: "DNS name of the public ALB for WebSocket connections"
+    Value: !GetAtt PublicLoadBalancer.DNSName
+  
+  PublicALBArn:
+    Description: "ARN of the public ALB"
+    Value: !Ref PublicLoadBalancer
+  
+  WAFWebACLArn:
+    Description: "ARN of the WAF Web ACL protecting the WebSocket endpoint"
+    Value: !GetAtt WebSocketWAFWebACL.Arn
+  
+  PrivateALBDNSName:
+    Description: "DNS name of the private ALB for HTTP API Gateway traffic"
+    Value: !GetAtt PrivateLoadBalancer.DNSName

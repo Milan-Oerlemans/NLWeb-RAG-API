@@ -27,7 +27,7 @@ class ConversationManager {
     await this.loadLocalConversations(selectedSite);
   }
 
-  async loadLocalConversations(selectedSite = null) {
+  async loadLocalConversations() {
     this.conversations = [];
 
     try {
@@ -46,7 +46,6 @@ class ConversationManager {
               id: convId,
               messages: [],
               timestamp: msg.timestamp,
-              site: msg.content?.site || 'all',
               mode: msg.content?.mode || 'list',
               title: 'New chat'
             };
@@ -58,12 +57,10 @@ class ConversationManager {
           conversationMap[convId].messages.push(msgData);
           
           // Update conversation metadata only from user messages
-          // Assistant messages should not change the conversation's site or mode
+          // Assistant messages should not change the conversation's mode
           if (msg.sender_type === 'user' || msg.message_type == 'user') {
-            const msgSite = msg.content?.site;
             const msgMode = msg.content?.mode;
             const msgQuery = msg.content?.query;
-            if (msgSite) conversationMap[convId].site = msgSite;
             if (msgMode) conversationMap[convId].mode = msgMode;
             // Use the query as title if available
             if (msgQuery && msgQuery !== '') {
@@ -74,14 +71,10 @@ class ConversationManager {
           if (msg.timestamp > conversationMap[convId].timestamp) {
             conversationMap[convId].timestamp = msg.timestamp;
           }
-       //   console.log(conversationMap[convId]);
         });
         
         // Convert map to array
         let conversations = Object.values(conversationMap);
-        
-        // Don't filter by site - show all conversations regardless of selected site
-        // The selected site only affects new queries, not which conversations are shown
         
         // Sort messages within each conversation by timestamp
         conversations.forEach(conv => {
@@ -91,8 +84,7 @@ class ConversationManager {
         // Sort conversations by timestamp (most recent first)
         conversations.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-        // Filter by site if specified
-        this.conversations = selectedSite ? conversations.filter(c => c.site === selectedSite) : conversations;
+        this.conversations = conversations;
     } catch (e) {
       console.error('Error loading conversations from IndexedDB:', e);
       this.conversations = [];
@@ -413,127 +405,48 @@ class ConversationManager {
       return hasMessages;
     });
     
+    // Sort conversations by timestamp (most recent first)
+    conversationsWithContent.sort((a, b) => b.timestamp - a.timestamp);
     
-    // Group conversations by site
-    const conversationsBySite = {};
     conversationsWithContent.forEach(conv => {
-      const site = conv.site || 'all';
-      if (!conversationsBySite[site]) {
-        conversationsBySite[site] = [];
-      }
-      conversationsBySite[site].push(conv);
-    });
-    
-    // Sort sites alphabetically, but keep 'all' at the top
-    const sites = Object.keys(conversationsBySite).sort((a, b) => {
-      if (a === 'all') return -1;
-      if (b === 'all') return 1;
-      return a.toLowerCase().localeCompare(b.toLowerCase());
-    });
-    
-    // Create UI for each site group
-    sites.forEach(site => {
-      const conversations = conversationsBySite[site];
-      
-      // Check if this is a dropdown container (which only shows one site)
-      const isDropdown = container && container.classList.contains('nlweb-dropdown-conversations-list');
-
-      // Create site group wrapper
-      const siteGroup = document.createElement('div');
-      siteGroup.className = 'site-group';
-
-      // Create conversations container for this site
-      const conversationsContainer = document.createElement('div');
-      conversationsContainer.className = 'site-conversations';
-
-      // Only show site header if not in dropdown
-      if (!isDropdown) {
-        // Create site header
-        const siteHeader = document.createElement('div');
-        siteHeader.className = 'site-group-header';
-
-        // Add site name (cleaned up for display)
-        const siteName = document.createElement('span');
-        siteName.textContent = this.cleanSiteName(site);
-        siteHeader.appendChild(siteName);
-
-        // Add chevron icon
-        const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        chevron.setAttribute('class', 'chevron');
-        chevron.setAttribute('viewBox', '0 0 24 24');
-        chevron.setAttribute('fill', 'none');
-        chevron.setAttribute('stroke', 'currentColor');
-        chevron.setAttribute('stroke-width', '2');
-        chevron.innerHTML = '<polyline points="6 9 12 15 18 9"></polyline>';
-        siteHeader.appendChild(chevron);
-
-        siteGroup.appendChild(siteHeader);
-
-        // Add click handler to toggle conversations visibility
-        siteHeader.addEventListener('click', () => {
-          conversationsContainer.classList.toggle('collapsed');
-          siteHeader.classList.toggle('collapsed');
-        });
+      const convItem = document.createElement('div');
+      convItem.className = 'conversation-item';
+      convItem.dataset.conversationId = conv.id;  // Add the data attribute for the click handler
+      if (conv.id === chatInterface.currentConversationId) {
+        convItem.classList.add('active');
       }
       
-      // Sort conversations by timestamp (most recent first)
-      conversations.sort((a, b) => b.timestamp - a.timestamp);
-      
-      conversations.forEach(conv => {
-        const convItem = document.createElement('div');
-        convItem.className = 'conversation-item';
-        convItem.dataset.conversationId = conv.id;  // Add the data attribute for the click handler
-        if (conv.id === chatInterface.currentConversationId) {
-          convItem.classList.add('active');
-        }
-        
-        // Delete button (now on the left)
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'conversation-delete';
-        deleteBtn.innerHTML = '×';
-        deleteBtn.title = 'Delete conversation';
-        deleteBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this.deleteConversation(conv.id, chatInterface);
-        });
-        convItem.appendChild(deleteBtn);
-        
-        // Create conversation content container
-        const convContent = document.createElement('div');
-        convContent.className = 'conversation-content';
-        
-        // Title span
-        const titleSpan = document.createElement('span');
-        titleSpan.className = 'conversation-title';
-        titleSpan.textContent = conv.title || 'Untitled';
-        titleSpan.addEventListener('click', async () => {
-          await this.loadConversation(conv.id, chatInterface);
-        });
-        convContent.appendChild(titleSpan);
-        
-        convItem.appendChild(convContent);
-        
-        conversationsContainer.appendChild(convItem);
+      // Delete button (now on the left)
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'conversation-delete';
+      deleteBtn.innerHTML = '×';
+      deleteBtn.title = 'Delete conversation';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteConversation(conv.id, chatInterface);
       });
+      convItem.appendChild(deleteBtn);
       
-      siteGroup.appendChild(conversationsContainer);
-      targetContainer.appendChild(siteGroup);
+      // Create conversation content container
+      const convContent = document.createElement('div');
+      convContent.className = 'conversation-content';
+      
+      // Title span
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'conversation-title';
+      titleSpan.textContent = conv.title || 'Untitled';
+      titleSpan.addEventListener('click', async () => {
+        await this.loadConversation(conv.id, chatInterface);
+      });
+      convContent.appendChild(titleSpan);
+      
+      convItem.appendChild(convContent);
+      
+      targetContainer.appendChild(convItem);
     });
   }
 
-  // Helper method to clean up site names for display
-  cleanSiteName(site) {
-    if (!site) return site;
-    
-    // Remove common domain suffixes
-    return site
-      .replace(/\.myshopify\.com$/, '')
-      .replace(/\.com$/, '')
-      .replace(/\.org$/, '')
-      .replace(/\.net$/, '')
-      .replace(/\.io$/, '')
-      .replace(/\.co$/, '');
-  }
+  
   
   // Helper method to get conversations
   getConversations() {

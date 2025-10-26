@@ -939,19 +939,34 @@ async def join_via_share_link_get_handler(request: web.Request) -> web.Response:
     return web.HTTPFound(location=redirect_url)
 
 
+from webserver.middleware.auth_utils import WebSocketTicketStore
+
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     """
     WebSocket endpoint for real-time chat.
-    
-    GET /chat/ws
-    
-    Single WebSocket connection per client that can handle multiple conversations.
-    Messages include conversation_id to route to appropriate conversation.
+    Authenticates the connection using a short-lived ticket.
     """
+    # Authenticate the connection using the ticket from the query string
+    ticket = request.query.get('ticket')
+    if not ticket:
+        return web.json_response({'error': 'Ticket is missing'}, status=401)
+
+    ticket_store: WebSocketTicketStore = request.app['ws_ticket_store']
+    site_info = await ticket_store.consume_ticket(ticket)
+
+    if not site_info:
+        return web.json_response({'error': 'Invalid or expired ticket'}, status=401)
+
+    # Attach site info to the request for this connection
+    request['site_id'] = site_info['site_id']
+    request['site'] = site_info['site']
+    
+    logger.info(f"WebSocket connection authenticated for site: {request['site']}")
+    
     print(f"\n{'='*80}")
     print(f"WEBSOCKET CONNECTION REQUEST")
     print(f"{'='*80}")
-    
+    logger.info(f"WEBSOCKET CONNECTION REQUEST")
     # Get authenticated user or create anonymous user
     user = request.get('user')
     
@@ -1290,6 +1305,13 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                                     nlweb = NLWebParticipant(nlweb_handler, config)
                                     conv_manager.add_participant(conversation_id, nlweb)
                         
+                        # Inject site_id and site from the authenticated connection into metadata
+                        if 'site_id' in request and 'site' in request:
+                            if data.get('metadata') is None:
+                                data['metadata'] = {}
+                            data['metadata']['site_id'] = str(request['site_id'])
+                            data['metadata']['site'] = request['site']
+
                         # Frontend now sends properly structured messages with content field
                         message = Message.from_dict(data)
                         

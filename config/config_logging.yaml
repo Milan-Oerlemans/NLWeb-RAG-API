@@ -3,7 +3,7 @@
 # Valid levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
 logging:
   # Default log level to use if environment variable is not set
-  default_level: ERROR
+  default_level: INFO
   
   # Log files directory (optional - if not specified, logs will be in current directory)
   log_directory: "logs"
@@ -35,17 +35,17 @@ logging:
     # Core Handler Modules
     nlweb_handler:
       env_var: "NLWEB_HANDLER_LOG_LEVEL"
-      default_level: ERROR
+      default_level: INFO
       log_file: "nlweb_handler.log"
     
     ranking_engine:
       env_var: "RANKING_LOG_LEVEL"
-      default_level: ERROR
+      default_level: INFO
       log_file: "ranking.log"
     
     fast_track:
       env_var: "FASTTRACK_LOG_LEVEL"
-      default_level: ERROR
+      default_level: INFO
       log_file: "fasttrack.log"
     
     # Prompt System Modules
@@ -86,13 +86,20 @@ logging:
 
     required_info:
       env_var: "REQUIRED_INFO_LOG_LEVEL"
-      default_level: ERROR
+      default_level: INFO
       log_file: "required_info.log"
     
     webserver:
       env_var: "WEBSERVER_LOG_LEVEL"
-      default_level: ERROR
+      default_level: INFO
       log_file: "webserver.log"
+
+    postgres_client:
+      default_level: INFO
+      log_to_console: true
+      log_to_file: true
+      log_file: "postgres_client.log"
+      env_var: "POSTGRES_CLIENT_LOG_LEVEL"
   
   # Global settings
   global:

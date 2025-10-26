@@ -35,6 +35,7 @@ The webserver directory contains the aiohttp-based HTTP server implementation fo
   - `websocket_handler`: Manages WebSocket connections
   - Handles message routing, participant management
   - Supports reconnection with session recovery
+- `/api/auth/ws-ticket` - Pre Auth for websockets and their tickets
 
 #### OAuth Routes (`routes/oauth.py`)
 - `/api/oauth/config` - OAuth provider configuration

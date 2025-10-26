@@ -51,6 +51,12 @@ async def mcp_handler(request: web.Request) -> web.Response:
                 except Exception:
                     # Keep body as raw bytes if not JSON
                     pass
+
+        if 'site_id' in request:
+            query_params['site_id'] = request['site_id']
+        if 'site' in request:
+            query_params['site'] = request['site']
+    
         
         # MCP always uses regular JSON-RPC responses, not SSE
         # The streaming parameter in MCP is for the protocol itself, not HTTP streaming

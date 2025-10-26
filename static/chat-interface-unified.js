@@ -18,8 +18,6 @@ export class UnifiedChatInterface {
       userId: this.getOrCreateUserId(),
       currentStreaming: null,
       selectedMode: this.additionalParams.mode || 'list',
-      selectedSite: this.additionalParams.site || 'all',
-      sites: [],  // Will be loaded from API
       messageQueue: []
     };
     
@@ -169,11 +167,7 @@ export class UnifiedChatInterface {
       }
       // Don't show centered input by default - keep messages area empty
       
-      // Update the UI to show the selected site from URL params
-      const siteInfo = document.getElementById('chat-site-info');
-      if (siteInfo) {
-        siteInfo.textContent = `Asking ${this.state.selectedSite}`;
-      }
+      
       
       // Load conversation list only for full page, not for dropdown
       // Dropdown loads conversations on demand when opened
@@ -240,11 +234,7 @@ export class UnifiedChatInterface {
   handleUrlAutoQuery() {
     // Check if there's both a site and query parameter to auto-send
     if (this.additionalParams.site && this.additionalParams.query) {
-      // First ensure the site is selected in the UI
-      const siteInfo = document.getElementById('chat-site-info');
-      if (siteInfo) {
-        siteInfo.textContent = `Asking ${this.state.selectedSite}`;
-      }
+      
       
       // Create a new conversation
       this.createNewChat(this.state.selectedSite);
@@ -388,80 +378,58 @@ export class UnifiedChatInterface {
     if (this.ws.connectingPromise) {
       return this.ws.connectingPromise;
     }
-    
-    // Create a general WebSocket connection (not tied to a specific conversation)
-    let wsUrl = window.location.origin === 'file://' 
-      ? `ws://localhost:8000/chat/ws`
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/chat/ws`;
-    
-    // Add authentication if available
-    const authToken = localStorage.getItem('authToken');
-    const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}');
-    
-    if (authToken && authToken !== 'anonymous') {
-      // Add auth token and user info as query parameters for WebSocket
-      const params = new URLSearchParams();
-      params.append('auth_token', authToken);
-      if (userInfo.id) params.append('user_id', userInfo.id);
-      if (userInfo.name) params.append('user_name', userInfo.name);
-      if (userInfo.provider) params.append('provider', userInfo.provider);
-      wsUrl += '?' + params.toString();
-    }
-    
-    this.ws.connectingPromise = new Promise((resolve, reject) => {
+
+    this.ws.connectingPromise = new Promise(async (resolve, reject) => {
       try {
+        // 1. Fetch the WebSocket ticket
+        const ticketResponse = await fetch('/api/auth/ws-ticket', {
+          method: 'POST',
+          headers: {
+            'X-API-Key': this.options.apiKey,
+          },
+        });
+
+        if (!ticketResponse.ok) {
+          throw new Error('Failed to get WebSocket ticket');
+        }
+
+        const ticketData = await ticketResponse.json();
+        const ticket = ticketData.ticket;
+
+        // 2. Construct WebSocket URL with the ticket
+        let wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/chat/ws?ticket=${ticket}`;
+
+        // 3. Create WebSocket connection
         this.ws.connection = new WebSocket(wsUrl);
-        
+
         this.ws.connection.onopen = () => {
           this.ws.reconnectAttempts = 0;
-          delete this.ws.connectingPromise; // Clear the connecting promise
-          
-          // Request sites when connection opens
-          // Commented out to reduce unnecessary sites requests
-          // this.ws.connection.send(JSON.stringify({
-          //   type: 'sites_request'
-          // }));
-          
-          // Send any queued messages
+          delete this.ws.connectingPromise;
           this.flushMessageQueue();
-          
           resolve();
         };
-        
+
         this.ws.connection.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          
-          // Add basic validation to satisfy security scanners
-          if (data && typeof data === 'object') {
-            // Sanitize any DOM-related content if present
-            this.sanitizeMessageData(data);
-          }
-          
-          // Debug logging for received messages
-          if (data.message_type === 'user' || data.type === 'conversation_history') {
-          }
-          
-          if (data.message_type === 'multi_site_complete') {
-          }
-          this.handleStreamData(data, true);  // true = store messages
+          this.handleStreamData(data, true);
         };
-        
+
         this.ws.connection.onerror = (error) => {
-          delete this.ws.connectingPromise; // Clear the connecting promise
+          delete this.ws.connectingPromise;
           reject(error);
         };
-        
+
         this.ws.connection.onclose = () => {
-          delete this.ws.connectingPromise; // Clear the connecting promise
+          delete this.ws.connectingPromise;
           this.handleDisconnection();
         };
-        
+
       } catch (error) {
-        delete this.ws.connectingPromise; // Clear the connecting promise
+        delete this.ws.connectingPromise;
         reject(error);
       }
     });
-    
+
     return this.ws.connectingPromise;
   }
   
@@ -470,8 +438,14 @@ export class UnifiedChatInterface {
       this.ws.reconnectAttempts++;
       const delay = this.ws.reconnectDelay * Math.pow(2, this.ws.reconnectAttempts - 1);
       
+      this.showError(`Connection lost. Reconnecting in ${delay / 1000}s...`);
+
       setTimeout(() => {
-        this.connectWebSocket().catch(() => {});
+        this.connectWebSocket().catch(() => {
+          if (this.ws.reconnectAttempts >= this.ws.maxReconnects) {
+            this.showError('Connection lost. Please refresh the page.');
+          }
+        });
       }, delay);
     } else {
       this.showError('Connection lost. Please refresh the page.');
@@ -591,7 +565,6 @@ export class UnifiedChatInterface {
       message_type: 'user',
       content: {
         query: content,
-        site: this.state.selectedSite,
         mode: this.state.selectedMode,
         prev_queries: prevQueries  // Include previous queries for NLWeb context
       },
@@ -1345,21 +1318,7 @@ export class UnifiedChatInterface {
             </button>
           </div>
           <div class="input-box-bottom-row">
-            <div class="input-site-selector">
-              <button class="site-selector-icon" id="site-selector-icon" title="Select site">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <line x1="2" y1="12" x2="22" y2="12"></line>
-                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                </svg>
-              </button>
-              <div class="site-dropdown" id="site-dropdown">
-                <div class="site-dropdown-header">Select site</div>
-                <div id="site-dropdown-items">
-                  <!-- Sites will be populated dynamically -->
-                </div>
-              </div>
-            </div>
+            
             <div class="input-mode-selector">
               <button class="mode-selector-icon" id="centered-mode-selector-icon" title="Select mode">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1695,112 +1654,7 @@ export class UnifiedChatInterface {
   
   // ========== Utility Methods ==========
   
-  updateSiteDropdowns() {
-    // Update all site dropdown items if they exist
-    const siteDropdownItems = document.getElementById('site-dropdown-items');
-    if (siteDropdownItems && this.state.sites.length > 0) {
-      siteDropdownItems.innerHTML = '';
-      this.state.sites.forEach(site => {
-        const item = document.createElement('div');
-        item.className = 'site-dropdown-item';
-        item.dataset.site = site;
-        if (site === this.state.selectedSite) {
-          item.classList.add('selected');
-        }
-        item.textContent = site;
-        item.addEventListener('click', () => {
-          this.state.selectedSite = site;
-          // Update selection visually
-          siteDropdownItems.querySelectorAll('.site-dropdown-item').forEach(i => {
-            i.classList.toggle('selected', i.dataset.site === site);
-          });
-          document.getElementById('site-dropdown')?.classList.remove('show');
-          document.getElementById('site-selector-icon').title = `Site: ${site}`;
-          
-          // Update the "Asking..." text in the header
-          const siteInfo = document.getElementById('chat-site-info');
-          if (siteInfo) {
-            siteInfo.textContent = `Asking ${site}`;
-          }
-        });
-        siteDropdownItems.appendChild(item);
-      });
-    }
-  }
-
-  loadSitesNonBlocking() {
-    // Always use HTTP for sites loading to avoid blocking
-    // This runs completely asynchronously without any waiting
-    this.loadSitesViaHttp().catch(error => {
-      // Continue with default sites
-      this.state.sites = ['all'];
-      // Only set to 'all' if not already set from URL params
-      if (!this.state.selectedSite) {
-        this.state.selectedSite = 'all';
-      }
-    });
-  }
   
-  
-  async loadSitesViaHttp() {
-    // Check if we already have sites in memory
-    if (this.state.sites && this.state.sites.length > 0) {
-      return;
-    }
-    
-    // Fetch fresh sites data from server
-    try {
-      const baseUrl = window.location.origin === 'file://' ? 'http://localhost:8000' : '';
-      const response = await fetch(`${baseUrl}/sites?streaming=false`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data && data['message-type'] === 'sites' && Array.isArray(data.sites)) {
-        this.processSitesData(data.sites);
-      }
-    } catch (error) {
-      
-      // Fallback sites
-      this.state.sites = ['all'];
-      // Only set to 'all' if not already set from URL params
-      if (!this.state.selectedSite) {
-        this.state.selectedSite = 'all';
-      }
-    }
-  }
-  
-  processSitesData(sites) {
-    // Sort sites alphabetically
-    sites.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    
-    // Add 'all' to the beginning if not present
-    if (!sites.includes('all')) {
-      sites.unshift('all');
-    } else {
-      sites = sites.filter(site => site !== 'all');
-      sites.unshift('all');
-    }
-    
-    // Store sites
-    this.state.sites = sites;
-    // Don't override selectedSite if it was set from URL parameters
-    // Only set to 'all' if it wasn't already set
-    if (!this.state.selectedSite) {
-      this.state.selectedSite = 'all';
-    }
-    
-    // Don't automatically update dropdowns - they will be populated on-demand when clicked
-    // this.updateSiteDropdowns();
-  }
-  
-  clearCachedSites() {
-    // This method is kept for backwards compatibility but no longer needed
-    this.state.sites = [];
-  }
   
   getOrCreateUserId() {
     // First check if user is logged in via OAuth

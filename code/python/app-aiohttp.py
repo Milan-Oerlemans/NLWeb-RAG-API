@@ -28,7 +28,7 @@ async def main():
     logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
     logging.getLogger("azure").setLevel(logging.WARNING)
     
-    # # Suppress webserver middleware INFO logs
+    # # # Suppress webserver middleware INFO logs
     # logging.getLogger("webserver.middleware.logging_middleware").setLevel(logging.WARNING)
     # logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     

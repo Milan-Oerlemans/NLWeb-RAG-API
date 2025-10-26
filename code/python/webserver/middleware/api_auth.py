@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 # Public endpoints that don't require API key authentication
 PUBLIC_ENDPOINTS = {
-    '/',
     '/health',
     '/ready',
     '/oauth/callback',
@@ -17,7 +16,7 @@ PUBLIC_ENDPOINTS = {
     '/who',
     '/sites',
     '/config',
-    '/chat',
+    '/chat'
 }
 
 async def create_main_db_pool(app: web.Application):
@@ -49,57 +48,32 @@ async def close_main_db_pool(app: web.Application):
         logger.info("Main application database connection pool closed.")
 
 
+from webserver.middleware.auth_utils import authenticate_api_key
+
 @web.middleware
 async def api_key_auth_middleware(request: web.Request, handler):
     """
     Authenticate requests using an API key.
     """
-
     path = request.path
 
-    is_public = (
-        path in PUBLIC_ENDPOINTS or
-        path.startswith('/static/') or
-        path.startswith('/html/') or
-        path == '/favicon.ico'
-    )
-
-
-    if path.startswith('/chat/ws/'):
-        # For WebSocket upgrade requests, we'll let them through to the handler
-        # which will check auth separately since WebSocket can't use standard HTTP auth
-        return await handler(request)
+    # Public endpoints do not require API key authentication.
     public_endpoints_tuple = tuple(PUBLIC_ENDPOINTS)
-
-    if path.startswith(public_endpoints_tuple):
-        # Public endpoint, no auth required
+    if path in PUBLIC_ENDPOINTS or path.startswith('/static/') or path.startswith('/html/') or path == '/favicon.ico' or path.startswith(public_endpoints_tuple) or path == '/':
         return await handler(request)
 
-    api_key = request.headers.get('X-API-Key')
+    # WebSocket connections are authenticated via a ticket in the websocket_handler.
+    if path.startswith('/chat/ws/'):
+        return await handler(request)
 
-    if not api_key:
-        return web.json_response({'error': 'API key is missing'}, status=401)
+    # The new ticket endpoint is authenticated within its own handler.
+    if path == '/api/auth/ws-ticket':
+        return await handler(request)
 
-
-    pool = request.app.get('main_db_pool')
-    if not pool:
-        logger.error("Main DB pool not available for API key validation.")
-        return web.json_response({'error': 'Internal server error'}, status=500)
-
-    try:
-        async with pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT site_id FROM sites WHERE api_key = %s", (api_key,))
-                result = await cur.fetchone()
-
-                if result:
-                    site_id_uuid = result[0]
-                    # Attach site_id (UUID) and site (string) to the request
-                    request['site_id'] = site_id_uuid
-                    request['site'] = str(site_id_uuid)
-                    return await handler(request)
-                else:
-                    return web.json_response({'error': 'Invalid API key'}, status=401)
-    except Exception as e:
-        logger.exception(f"Error during API key validation: {e}")
-        return web.json_response({'error': 'Internal server error'}, status=500)
+    site_info = await authenticate_api_key(request)
+    if site_info:
+        request['site_id'] = site_info['site_id']
+        request['site'] = site_info['site']
+        return await handler(request)
+    
+    return web.json_response({'error': 'Invalid or Missing API key'}, status=401)

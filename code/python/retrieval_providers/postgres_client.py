@@ -88,29 +88,78 @@ class PgVectorClient(RetrievalClientBase):
     def _get_config_from_postgres_connection_string(self, connection_string: str) -> Dict[str, Any]:
         """
         Parse the PostgreSQL connection string and return a dictionary of configuration parameters.
+        This implementation is designed to be robust against special characters in passwords.
         
         Args:
-            connection_string: PostgreSQL connection string
+            connection_string: PostgreSQL connection string (e.g., postgresql://user:pass@host:port/db)
         Returns:
             Dictionary of configuration parameters
         """
-        parsed_url = urlparse(connection_string)
-        
-        host = parsed_url.hostname
-        port = parsed_url.port
-        database = parsed_url.path[1:]  # remove leading slash
-        query_params = parse_qs(parsed_url.query)
-        
-        username = parsed_url.username
-        password = parsed_url.password
-        
-        return {
-            'host': host,
-            'port': port,
-            'database': database,
-            'username': username,
-            'password': password
-        }
+        logger.info(f"Parsing PostgreSQL connection string")
+
+        try:
+            # Remove the scheme prefix if it exists
+            if "://" in connection_string:
+                rest = connection_string.split("://", 1)[1]
+            else:
+                rest = connection_string
+            
+            # Default values
+            username, password, host, port, database = None, None, None, None, None
+
+            # Split credentials from the rest of the URI using rsplit to handle '@' in password
+            if "@" in rest:
+                creds, host_part = rest.rsplit("@", 1)
+                
+                # Parse credentials
+                if ":" in creds:
+                    username, password = creds.split(":", 1)
+                else:
+                    username = creds
+            else:
+                host_part = rest
+
+            # Parse the rest of the URI (host, port, database)
+            # The database is the part after the first slash
+            if "/" in host_part:
+                host_port, database = host_part.split("/", 1)
+                # handle query params
+                if "?" in database:
+                    database = database.split("?")[0]
+            else:
+                host_port = host_part
+                database = None
+
+            # The host and port are in the host_port part
+            if ":" in host_port:
+                host, port_str = host_port.split(":", 1)
+                port = int(port_str)
+            else:
+                host = host_port
+
+            config = {
+                'host': host,
+                'port': port,
+                'database': database,
+                'username': username,
+                'password': password
+            }
+            logger.info(f"Successfully parsed PostgreSQL connection string. Host: {host}, DB: {database}")
+            return config
+
+        except Exception as e:
+            logger.warning(f"Manual parsing of PostgreSQL connection string failed: {e}. Falling back to urlparse.")
+            # Fallback to the original method if manual parsing fails
+            parsed_url = urlparse(connection_string)
+            logger.info(f"Parsed PostgreSQL URL (fallback): {parsed_url}")
+            
+            return {
+                'host': parsed_url.hostname,
+                'port': parsed_url.port,
+                'database': parsed_url.path[1:] if parsed_url.path else None,
+                'username': parsed_url.username,
+                'password': parsed_url.password
+            }
 
     def _get_endpoint_config(self):
         """

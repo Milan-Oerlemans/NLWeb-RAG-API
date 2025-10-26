@@ -77,6 +77,11 @@ async def a2a_handler(request: web.Request) -> web.Response:
                     response_data = json.loads(data)
                 except:
                     response_data = {"data": data}
+
+        if 'site_id' in request:
+            query_params['site_id'] = request['site_id']
+        if 'site' in request:
+            query_params['site'] = request['site']
         
         # Call the A2A handler
         await handle_a2a_request(query_params, body, send_response, send_chunk)
