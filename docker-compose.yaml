@@ -24,8 +24,8 @@ services:
     restart: unless-stopped
     user: nlweb
     networks:
-      - sitetor-postgres-network
+      - localstack_network
 
 networks:
-  sitetor-postgres-network:
+  localstack_network:
     external: true
